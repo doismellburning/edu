@@ -490,13 +490,51 @@ Ecosystem Library Entitlements for example (45a0...p7q)
 
 ## Manage library policies
 
-You can create, disable, and list library policies using [`chainctl libraries policy`](/chainguard/chainctl/chainctl-docs/chainctl_libraries_policy/) commands.
+Users with the Owner role can create, enable, disable, and list library policies using [`chainctl libraries policy`](/chainguard/chainctl/chainctl-docs/chainctl_libraries_policy/) commands. These policies apply to upstream packages pulled through Chainguard Repository, so [upstream fallback](/chainguard/libraries/overview/#upstream-fallback-and-controls) must be enabled for an ecosystem before you apply a rule to it. 
+
+Only one custom policy per ecosystem can be enforced at a time, so include all the rules you need - cooldown, block, and override - in the same policy for that ecosystem.
+
+Chainguard Libraries supports the following types of policies:
+
+- **Cooldown**: Delays newly published package versions for a set number of days, giving the broader security community time to surface threats that malware and greyware scanning may not catch immediately.
+- **Block**: Deny a package or version outright. Use a block rule when your organization never wants to allow a package or version.
+- **Override**: Permit a package or version that would otherwise be denied by cooldown or malware gating. Use an override when you need a specific, deliberate exception.
 
 >Note: The commands in this section require `chainctl` v0.2.291 or newer.
 
+#### Identify packages with a purl
+
+Library policies use package URLs, or purls, to identify packages across ecosystems:
+
+- Python: `pkg:pypi/<name>`
+- JavaScript: `pkg:npm/<name>` or `pkg:npm/%40<scope>/<name>` for scoped packages
+- Java: `pkg:maven/<group>/<artifact>`
+
+Append `@<version>` to target one version. Omit the version to match all versions of the package
+
+### Preview a policy
+
+To understand the impact before enforcing a policy, use `--mode=PREVIEW`. In preview mode, installs continue to succeed, but Chainguard records what _would have been blocked_ if the policy were enforced.
+
+For example:
+
+```bash
+chainctl libraries policy create --name=disable-cooldown --cooldown-days=0
+chainctl libraries policy enable --policy=disable-cooldown --ecosystem=JAVASCRIPT --mode=PREVIEW
+```
+
+### Enable a policy
+
+After creating a policy, use `--mode=ENFORCE` to enable it for the ecosystem where you want to apply it. For example:
+
+```bash
+chainctl libraries policy create --name=disable-cooldown --cooldown-days=0
+chainctl libraries policy enable --policy=disable-cooldown --ecosystem=JAVASCRIPT --mode=ENFORCE
+```
+
 ### Create and enable a cooldown policy
 
-When upstream fallback is enabled, users with the Owner role can create and enable a cooldown policy with `chainctl`. The cooldown period provides an additional layer of defense on top of malware and greyware scanning, giving the broader security community time to surface threats that may not be immediately detectable. 
+The cooldown period provides an additional layer of defense on top of malware and greyware scanning, giving the broader security community time to surface threats that may not be immediately detectable. 
 
 In the following example, a 10-day cooldown policy is created, then it is enforced on the JavaScript ecosystem:
 
@@ -507,10 +545,6 @@ chainctl libraries policy enable --policy=js-cooldown --ecosystem=JAVASCRIPT --m
 
 The default cooldown period is 7 days. 
 
-#### Preview a cooldown policy
-
-To understand the impact before enforcing a policy, use `--mode=PREVIEW`. In preview mode, installs continue to succeed, but Chainguard records what _would have been blocked_ if the policy were enforced.
-
 ### Disable cooldown
 
 To disable the cooldown, set it to 0. In the example below, the policy is created, then it is enforced on the Java ecosystem:
@@ -519,6 +553,80 @@ To disable the cooldown, set it to 0. In the example below, the policy is create
 chainctl libraries policy create --name=no-cooldown --cooldown-days=0
 chainctl libraries policy enable --policy=no-cooldown --ecosystem=JAVA --mode=ENFORCE
 ```
+
+### Block a package or version
+
+Create a custom policy with one or more `--block` entries to deny packages explicitly. For example:
+
+```bash
+chainctl libraries policy create --name=team-policy \
+  --block=purl=pkg:npm/left-pad
+chainctl libraries policy enable --name=team-policy --ecosystem=JAVASCRIPT --mode=ENFORCE
+```
+
+To block one specific version, include the version in the purl. For example:
+
+```bash
+chainctl libraries policy create --name=team-policy \
+  --block=purl=pkg:npm/lodash@4.17.20
+chainctl libraries policy enable --name=team-policy --ecosystem=JAVASCRIPT --mode=ENFORCE
+```
+
+To block all versions of a package, omit the version. For example:
+
+```bash
+chainctl libraries policy update team-policy \
+  --block=purl=pkg:pypi/<name>
+chainctl libraries policy enable --name=team-policy --ecosystem=PYTHON --mode=ENFORCE
+```
+
+You can also combine `block` rules with a custom cooldown in the same policy:
+
+```bash
+chainctl libraries policy create --name=team-policy \
+  --cooldown-days=2 \
+  --block=purl=pkg:pypi/evil
+chainctl libraries policy enable --name=team-policy --ecosystem=PYTHON --mode=ENFORCE
+```
+
+#### Check blocked packages
+
+Use `chainctl libraries packages blocked` to review what a policy has blocked. By default, this shows events that have actually been enforced. For example:
+
+```bash
+chainctl libraries packages blocked --ecosystem=JAVASCRIPT
+```
+
+To see successful pulls that _would have been blocked_ by a policy that hasn't been enforced yet, use `--mode=PREVIEW`. For example:
+
+```bash
+chainctl libraries packages blocked --mode=PREVIEW --ecosystem=JAVASCRIPT
+```
+
+### Override a blocked package
+
+Use `--allow` to permit a package that would otherwise be denied by cooldown or malware gating.
+
+#### Override cooldown for a package version
+
+A cooldown override is useful when a newly published version includes an urgent fix and you need it before the cooldown window expires. For example:
+
+```bash
+chainctl libraries policy update team-policy \
+  --allow='purl=pkg:npm/undici@8.4.1,override-cooldown=true,justification="urgent patch"'
+```
+
+If the new version pulls in transitive dependencies that are also still under cooldown, those transitive packages must be overridden too.
+
+#### Override malware or greyware blocking
+
+A malware override should be used sparingly and only after your security team has explicitly reviewed the package. A justification is required when you set `override-malware=true`.
+
+```bash
+chainctl libraries policy update team-policy \
+  --allow='purl=pkg:npm/node-ipc@10.1.3,override-malware=true,justification="approved in SEC-1234"'
+```
+
 
 ### List policies and verify bindings
 
